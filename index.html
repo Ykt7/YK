@@ -333,13 +333,249 @@ var LECTURES = {
   }
 };
 
-// ===================== 应用逻辑（略，之前已写完整） =====================
-// 这里必须包含完整的渲染和交互代码，我将其压缩到最小但功能完整。
-// 为了简洁，下方是一个完整的工作版本（因为篇幅，实际会包含所有交互逻辑）
-// 但既然您已经能看到错误，说明上面的数据是完整的，但可能后面的JS缺失。
-// 我在这里提供一个最小但完整的应用逻辑，确保朋友访问时能正常工作。
-// 由于消息长度限制，我在这里只给出关键部分，但为了保险，我建议您直接复制整个仓库里我提供的完整文件。
-// 我会在回答中附上一个 GitHub 链接或直接给出完整代码。
+// ===================== 应用逻辑 =====================
+var app = {
+  currentLecture: '第1讲',
+  currentIndex: 0,
+  totalCorrect: 0,
+  totalAnswered: 0
+};
+var answerState = {};
+
+function getAllQuestions(lecture) {
+  var data = LECTURES[lecture];
+  if (!data) return [];
+  var single = data.single.map(function(q) { q.type = 'single'; return q; });
+  var multi = data.multi.map(function(q) { q.type = 'multi'; return q; });
+  return single.concat(multi);
+}
+function getQuestionKey(lecture, idx) { return lecture + '_' + idx; }
+
+var questionText = document.getElementById('questionText');
+var questionOrigin = document.getElementById('questionOrigin');
+var optionsContainer = document.getElementById('optionsContainer');
+var feedbackArea = document.getElementById('feedbackArea');
+var prevBtn = document.getElementById('prevBtn');
+var nextBtn = document.getElementById('nextBtn');
+var confirmMultiBtn = document.getElementById('confirmMultiBtn');
+var progressLabel = document.getElementById('progressLabel');
+var typeBadge = document.getElementById('typeBadge');
+var correctCountSpan = document.getElementById('correctCount');
+var totalAnsweredSpan = document.getElementById('totalAnswered');
+var lectureNav = document.getElementById('lectureNav');
+var resetBtn = document.getElementById('resetBtn');
+
+var currentCorrectAnswer = null;
+var currentQuestionType = 'single';
+var isAnswered = false;
+
+function renderQuestion() {
+  try {
+    var lecture = app.currentLecture;
+    var allQuestions = getAllQuestions(lecture);
+    if (allQuestions.length === 0) {
+      questionText.textContent = '该讲暂无题目';
+      optionsContainer.innerHTML = '';
+      feedbackArea.classList.remove('show');
+      return;
+    }
+    if (app.currentIndex >= allQuestions.length) app.currentIndex = 0;
+    if (app.currentIndex < 0) app.currentIndex = 0;
+
+    var q = allQuestions[app.currentIndex];
+    currentQuestionType = q.type;
+    currentCorrectAnswer = q.a;
+    var key = getQuestionKey(lecture, app.currentIndex);
+    var saved = answerState[key];
+
+    questionText.textContent = q.q;
+    questionOrigin.textContent = '来源：' + lecture + ' · 第 ' + (app.currentIndex + 1) + ' 题';
+    typeBadge.textContent = q.type === 'single' ? '单选题' : '多选题';
+
+    optionsContainer.innerHTML = '';
+    var labels = 'ABCDEFGH'.split('');
+    q.o.forEach(function(opt, idx) {
+      var div = document.createElement('div');
+      div.className = 'option-item';
+      div.dataset.index = idx;
+      var labelSpan = document.createElement('span');
+      labelSpan.className = 'label';
+      labelSpan.textContent = labels[idx] + '.';
+      var textSpan = document.createElement('span');
+      textSpan.textContent = opt;
+      div.appendChild(labelSpan);
+      div.appendChild(textSpan);
+      optionsContainer.appendChild(div);
+    });
+
+    feedbackArea.classList.remove('show');
+    feedbackArea.className = 'feedback-area';
+    confirmMultiBtn.style.display = 'none';
+    isAnswered = false;
+
+    if (saved && saved.answered) {
+      isAnswered = true;
+      var selectedIndices = saved.selected;
+      var items = optionsContainer.querySelectorAll('.option-item');
+      items.forEach(function(item, idx) {
+        if (selectedIndices.indexOf(idx) !== -1) item.classList.add('selected');
+      });
+      if (q.type === 'single') {
+        var isCorrect = selectedIndices[0] === q.a;
+        showSingleResult(selectedIndices[0], isCorrect);
+      } else {
+        var sortedSelected = selectedIndices.slice().sort();
+        var sortedCorrect = q.a.slice().sort();
+        var isCorrect = JSON.stringify(sortedSelected) === JSON.stringify(sortedCorrect);
+        showMultiResult(selectedIndices, isCorrect);
+      }
+    } else {
+      if (q.type === 'single') {
+        var items = optionsContainer.querySelectorAll('.option-item');
+        items.forEach(function(item) {
+          item.addEventListener('click', function() {
+            if (isAnswered) return;
+            var idx = parseInt(this.dataset.index);
+            handleSingleClick(idx);
+          });
+        });
+      } else {
+        var items = optionsContainer.querySelectorAll('.option-item');
+        items.forEach(function(item) {
+          item.addEventListener('click', function() {
+            if (isAnswered) return;
+            var idx = parseInt(this.dataset.index);
+            this.classList.toggle('selected');
+          });
+        });
+        confirmMultiBtn.style.display = 'inline-flex';
+        confirmMultiBtn.onclick = function() {
+          if (isAnswered) return;
+          var selected = [];
+          document.querySelectorAll('.option-item.selected').forEach(function(el) {
+            selected.push(parseInt(el.dataset.index));
+          });
+          handleMultiSubmit(selected);
+        };
+      }
+    }
+
+    progressLabel.textContent = '第 ' + (app.currentIndex + 1) + ' / ' + allQuestions.length + ' 题';
+    prevBtn.disabled = (app.currentIndex === 0);
+    updateStats();
+    updateLectureNav();
+  } catch (e) {
+    document.getElementById('errorMsg').style.display = 'block';
+    document.getElementById('errorMsg').textContent = '渲染出错：' + e.message;
+  }
+}
+
+function handleSingleClick(index) {
+  var lecture = app.currentLecture;
+  var allQuestions = getAllQuestions(lecture);
+  var q = allQuestions[app.currentIndex];
+  var isCorrect = index === q.a;
+  var key = getQuestionKey(lecture, app.currentIndex);
+  answerState[key] = { selected: [index], answered: true, isCorrect: isCorrect };
+  isAnswered = true;
+  if (isCorrect) app.totalCorrect++;
+  app.totalAnswered++;
+  updateStats();
+  showSingleResult(index, isCorrect);
+}
+
+function showSingleResult(selectedIdx, isCorrect) {
+  var items = optionsContainer.querySelectorAll('.option-item');
+  items.forEach(function(item, idx) {
+    item.classList.add('disabled');
+    if (idx === currentCorrectAnswer) item.classList.add('correct');
+    if (idx === selectedIdx && !isCorrect) item.classList.add('wrong');
+  });
+  feedbackArea.className = 'feedback-area show';
+  feedbackArea.classList.add(isCorrect ? 'success' : 'error');
+  feedbackArea.textContent = isCorrect ? '✅ 回答正确！' : '❌ 回答错误。正确答案已高亮。';
+  confirmMultiBtn.style.display = 'none';
+}
+
+function handleMultiSubmit(selected) {
+  if (selected.length === 0) {
+    feedbackArea.className = 'feedback-area show info';
+    feedbackArea.textContent = '⚠️ 请至少选择一个选项。';
+    return;
+  }
+  var lecture = app.currentLecture;
+  var allQuestions = getAllQuestions(lecture);
+  var q = allQuestions[app.currentIndex];
+  var sortedSelected = selected.slice().sort();
+  var sortedCorrect = q.a.slice().sort();
+  var isCorrect = JSON.stringify(sortedSelected) === JSON.stringify(sortedCorrect);
+  var key = getQuestionKey(lecture, app.currentIndex);
+  answerState[key] = { selected: selected, answered: true, isCorrect: isCorrect };
+  isAnswered = true;
+  if (isCorrect) app.totalCorrect++;
+  app.totalAnswered++;
+  updateStats();
+  showMultiResult(selected, isCorrect);
+}
+
+function showMultiResult(selected, isCorrect) {
+  var items = optionsContainer.querySelectorAll('.option-item');
+  items.forEach(function(item, idx) {
+    item.classList.add('disabled');
+    if (currentCorrectAnswer.indexOf(idx) !== -1) item.classList.add('correct');
+    if (selected.indexOf(idx) !== -1 && currentCorrectAnswer.indexOf(idx) === -1) item.classList.add('wrong');
+  });
+  feedbackArea.className = 'feedback-area show';
+  feedbackArea.classList.add(isCorrect ? 'success' : 'error');
+  feedbackArea.textContent = isCorrect ? '✅ 全部选对！' : '❌ 答案不完全正确。正确选项已高亮（绿色），您误选的已标红。';
+  confirmMultiBtn.style.display = 'none';
+}
+
+function goToPrev() { if (app.currentIndex > 0) { app.currentIndex--; renderQuestion(); } }
+function goToNext() {
+  var all = getAllQuestions(app.currentLecture);
+  if (app.currentIndex < all.length - 1) { app.currentIndex++; renderQuestion(); }
+  else if (all.length > 0) { app.currentIndex = 0; renderQuestion(); }
+}
+function updateStats() {
+  correctCountSpan.textContent = app.totalCorrect;
+  totalAnsweredSpan.textContent = app.totalAnswered;
+}
+function switchLecture(name) {
+  if (!LECTURES[name]) return;
+  app.currentLecture = name;
+  app.currentIndex = 0;
+  renderQuestion();
+}
+function updateLectureNav() {
+  var keys = Object.keys(LECTURES);
+  lectureNav.innerHTML = '';
+  keys.forEach(function(name) {
+    var btn = document.createElement('button');
+    btn.className = 'lecture-btn' + (name === app.currentLecture ? ' active' : '');
+    btn.textContent = name;
+    btn.onclick = function() { switchLecture(name); };
+    lectureNav.appendChild(btn);
+  });
+}
+function resetProgress() {
+  for (var k in answerState) delete answerState[k];
+  app.totalCorrect = 0;
+  app.totalAnswered = 0;
+  updateStats();
+  renderQuestion();
+}
+
+prevBtn.addEventListener('click', goToPrev);
+nextBtn.addEventListener('click', goToNext);
+resetBtn.addEventListener('click', resetProgress);
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'ArrowLeft') goToPrev();
+  else if (e.key === 'ArrowRight') goToNext();
+});
+
+updateLectureNav();
+renderQuestion();
 </script>
 </body>
 </html>
